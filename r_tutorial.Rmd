@@ -1,0 +1,250 @@
+---
+title: "Data Wrangling in R: A Focused Guide"
+author: ""
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+    df_print: tibble
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+library(tidyverse)   # dplyr, tidyr, readr
+```
+
+## What is Data Wrangling?
+
+Data wrangling (or data munging) is the process of cleaning, transforming, and structuring raw, messy data into a clean, organized, and usable format suitable for analysis, machine learning, and decision-making.
+
+## Data
+
+We will use `malaria_temperature_10yr.csv`.
+
+```{r}
+data <- readr::read_csv("malaria_temperature_10yr.csv", show_col_types = FALSE)
+head(data)
+```
+
+## 1. Handling Missing Values
+
+### is.na()
+`is.na(x)` returns TRUE/FALSE for each element of `x` indicating missingness.
+- Use it to count, filter, or replace missing values.
+- Works on vectors, and also within `dplyr::mutate()` and `filter()`.
+
+```{r}
+colSums(is.na(data))  # count NAs in each column
+```
+
+### complete.cases()
+`complete.cases(df)` identifies rows with no NAs across the selected columns.
+- Useful for quickly subsetting to fully observed rows.
+- Be careful: it may drop many rows if multiple columns have NAs.
+
+```{r}
+sum(complete.cases(data))   # number of complete rows
+data_complete <- data[complete.cases(data), ]
+head(data_complete)
+```
+
+### na.omit()
+`na.omit(df)` removes all rows with at least one NA in any column.
+- Simple, but can bias results if missingness is systematic.
+- Prefer targeted imputation when feasible.
+
+```{r}
+data_no_na <- na.omit(data)
+nrow(data_no_na)
+```
+
+### tidyr::replace_na()
+`replace_na()` fills missing entries with specified constants.
+- Common strategies: median/mean for numeric, "Unknown" for text.
+- Always document your imputation choice and rationale.
+
+```{r}
+data_imputed <- data %>%
+  mutate(
+    AvgAnnualTemperatureC = tidyr::replace_na(AvgAnnualTemperatureC, median(AvgAnnualTemperatureC, na.rm = TRUE)),
+    MalariaIncidencePer1000 = tidyr::replace_na(MalariaIncidencePer1000, median(MalariaIncidencePer1000, na.rm = TRUE))
+  )
+head(data_imputed)
+```
+
+## 2. Fixing Data Types
+
+### as.numeric()
+Convert to numeric for calculations and plotting.
+- If coercion fails, NAs may be introduced; check with `sum(is.na(x))`.
+
+```{r}
+data_num <- data_imputed %>% mutate(AvgAnnualTemperatureC = as.numeric(AvgAnnualTemperatureC))
+str(data_num$AvgAnnualTemperatureC)
+```
+
+### as.character()
+Convert to plain text when you need string operations or to standardize types before joining.
+
+```{r}
+data_chr <- data_imputed %>% mutate(Country = as.character(Country))
+str(data_chr$Country)
+```
+
+### as.factor()
+Convert to categorical labels for grouping, modeling, and ordered categories (use `forcats` for levels).
+
+```{r}
+data_fac <- data_imputed %>% mutate(Country = as.factor(Country))
+levels(data_fac$Country)
+```
+
+### as.Date()
+Turn strings into calendar dates for time-aware sorting and filtering. Specify formats when needed, e.g. `as.Date(x, "%Y-%m-%d")`.
+
+```{r}
+dates <- as.Date(c("2020-01-01", "2020-12-31"))
+str(dates)
+```
+
+## 3. Using dplyr for Transformation
+
+### select()
+Pick only the columns you need to simplify your dataset and prevent accidental use of irrelevant variables.
+
+```{r}
+data_sel <- data_imputed %>% select(Year, Country, MalariaIncidencePer1000)
+head(data_sel)
+```
+
+### filter()
+Keep only the rows that satisfy conditions (e.g., country/year subsets) to focus analysis.
+
+```{r}
+data_filt <- data_imputed %>% filter(Country == "Nigeria", Year >= 2020)
+data_filt
+```
+
+### mutate()
+Create or modify columns to derive features (ratios, bands, flags) used in analysis and modeling.
+
+```{r}
+data_mut <- data_imputed %>%
+  mutate(IncidencePer100 = MalariaIncidencePer1000 / 10)
+head(data_mut)
+```
+
+### arrange()
+Sort rows to inspect trends or prepare outputs (ascending/descending, multiple keys).
+
+```{r}
+data_arr <- data_imputed %>% arrange(Country, desc(Year))
+head(data_arr)
+```
+
+### group_by() + summarise()
+Group by keys and compute summary statistics (counts, means). Always set `na.rm = TRUE` when needed.
+
+```{r}
+by_country <- data_imputed %>%
+  group_by(Country) %>%
+  summarise(mean_temp = mean(AvgAnnualTemperatureC, na.rm = TRUE),
+            mean_incidence = mean(MalariaIncidencePer1000, na.rm = TRUE))
+by_country
+```
+
+## 4. Using tidyr for Reshaping
+
+### pivot_wider()
+Reshape long data into wide format, creating one column per category. Great for reporting and quick comparisons.
+
+```{r}
+wide_inc <- data_imputed %>%
+  select(Year, Country, MalariaIncidencePer1000) %>%
+  pivot_wider(names_from = Country, values_from = MalariaIncidencePer1000)
+head(wide_inc)
+```
+
+### pivot_longer()
+Reshape wide data back to tidy format for plotting, modeling, and grouped operations.
+
+```{r}
+long_inc <- wide_inc %>%
+  pivot_longer(-Year, names_to = "Country", values_to = "MalariaIncidencePer1000")
+head(long_inc)
+```
+
+### separate()
+Split a single column into multiple fields using a delimiter or regex (e.g., split codes like `NG-2019`).
+
+```{r}
+toy <- tibble(id = c("NG-2019", "GH-2020"))
+toy_sep <- toy %>% separate(id, into = c("code", "year"), sep = "-")
+toy_sep
+```
+
+### unite()
+Combine several columns into one field with a chosen separator (useful for creating keys or labels).
+
+```{r}
+toy_unite <- toy_sep %>% unite("rejoined", code, year, sep = ":")
+toy_unite
+```
+
+## 5. Joining and Combining Data
+
+Create a small lookup table and demonstrate joins and binds.
+
+```{r}
+meta <- tibble(
+  Country = factor(c("Nigeria", "Ghana", "Kenya", "Tanzania")),
+  Region = c("West", "West", "East", "East")
+)
+```
+
+### left_join()
+Match by key columns and keep all rows from the left table; unmatched rows get NAs for right-side columns.
+
+```{r}
+joined_left <- data_imputed %>% left_join(meta, by = "Country")
+head(joined_left)
+```
+
+### inner_join()
+Return only rows with keys present in both tables; use when you need strict matches.
+
+```{r}
+joined_inner <- data_imputed %>% inner_join(meta, by = "Country")
+head(joined_inner)
+```
+
+### full_join()
+Keep all keys from both tables; unmatched cells become NAs. Useful for audits.
+
+```{r}
+joined_full <- data_imputed %>% full_join(meta, by = "Country")
+head(joined_full)
+```
+
+### bind_rows()
+Append rows from data frames with the same (or compatible) columns; adds missing columns if needed.
+
+```{r}
+some_years <- data_imputed %>% filter(Year <= 2019)
+stacked <- bind_rows(some_years, some_years)
+nrow(stacked)
+```
+
+### bind_cols()
+Combine columns from data frames with the same row order/length; does not check key alignment.
+
+```{r}
+cols_combined <- bind_cols(
+  data_imputed %>% select(Year, Country),
+  data_imputed %>% select(AvgAnnualTemperatureC)
+)
+head(cols_combined)
+```
+
+
